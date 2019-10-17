@@ -1,5 +1,6 @@
 import asyncio
 import json
+import base64
 import logging
 from pathlib import Path
 
@@ -182,6 +183,26 @@ class Controller:
 
         """
         await self._connector.disconnect()
+
+    async def credential(self, username, *credentials):
+        """Get list of credentials
+
+        :param str username: The credential's user name
+        :param str *credential: Name or list of credential names
+        :returns: -> typing.Sequence[~CloudCredentialResult]
+        """
+        entities = []
+        cloud_name = await self.get_cloud()
+        for credential in credentials:
+            entity = client.Entity(tag.credential(
+                cloud_name,
+                username,
+                )
+            )
+            entities.append(entity)
+
+        cloud_facade = client.CloudFacade.from_connection(self.connection())
+        return await cloud_facade.Credential(entities=entities)
 
     async def add_credential(self, name=None, credential=None, cloud=None,
                              owner=None, force=False):
@@ -437,14 +458,101 @@ class Controller:
         """
         raise NotImplementedError()
 
+    async def cloud(self, name=None):
+        """Get Cloud
+
+        :param str name: Cloud name. If not specified, the cloud where
+                         the controller lives on is returned.
+        :returns: -> ~CloudResult
+        """
+        if name is None:
+            name = await self.get_cloud()
+        entity = client.Entity(tag.cloud(name))
+        cloud_facade = client.CloudFacade.from_connection(self.connection())
+        cloud = await cloud_facade.Cloud(entities=[entity])
+        return cloud.results[0]
+
+    async def clouds(self):
+        """Get all the clouds in the controller
+
+        :returns: -> ~CloudsResult
+        """
+        cloud_facade = client.CloudFacade.from_connection(self.connection())
+        return await cloud_facade.Clouds()
+
+    async def add_k8s(self, name,
+                            cacert=None,
+                            cacert_data=None,
+                            auth_types='userpass',
+                            endpoint=None,
+                            credential_name=None,
+                            username=None,
+                            password=None,
+                            region=None,
+                            operator_storage=None,
+                            workload_storage=None):
+        # add k8s cloud to the current controller.
+        cloud_facade = client.CloudFacade.from_connection(self.connection())
+
+        cloud_regions = [client.CloudRegion(endpoint=endpoint, name=region)]\
+            if region is not None else None
+
+        if cacert and cacert_data:
+            log.error('Only cacert or cacert_data should be specified')
+        elif not cacert and not cacert_data:
+            log.error('Cacert or cacert_data must be specified')
+        elif cacert_data:
+            cacert = str(base64.b64decode(cacert_data), "utf-8")
+
+        cloud_config = {
+                'operator-storage': operator_storage,
+                'workload-storage': workload_storage
+        }
+
+        cloud = client.Cloud(
+            auth_types=['userpass'],
+            ca_certificates=[cacert],
+            config=cloud_config,
+            endpoint=endpoint,
+            regions=cloud_regions,
+            type_='kubernetes'
+        )
+        await cloud_facade.AddCloud(cloud=cloud, name=name)
+
+        credential = client.CloudCredential(
+            auth_type='userpass',
+            attrs={
+                'username': username,
+                'password': password
+            }
+        )
+        await self.add_credential(
+            name=credential_name,
+            credential=credential,
+            cloud=name,
+            force=False
+        )
+
+    async def remove_cloud(self, *clouds):
+        """Remove clouds from controller
+
+        :param: str 
+        :returns: -> ~CloudsResult
+        """
+        entities = []
+        for cloud in clouds:
+            entities.append(client.Entity(tag.cloud(cloud)))
+        cloud_facade = client.CloudFacade.from_connection(self.connection())
+        await cloud_facade.RemoveClouds(entities=entities)
+
     async def get_cloud(self):
         """
         Get the name of the cloud that this controller lives on.
         """
         cloud_facade = client.CloudFacade.from_connection(self.connection())
 
-        result = await cloud_facade.Clouds()
-        cloud = list(result.clouds.keys())[0]  # only lives on one cloud
+        result = await cloud_facade.DefaultCloud()
+        cloud = result.result
         return tag.untag('cloud-', cloud)
 
     async def get_models(self, all_=False, username=None):
