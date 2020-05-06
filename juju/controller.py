@@ -12,6 +12,7 @@ from .errors import JujuAPIError
 from .offerendpoints import ParseError as OfferParseError
 from .offerendpoints import parse_offer_endpoint, parse_offer_url
 from .user import User
+# from .model import ModelObserver
 
 log = logging.getLogger(__name__)
 
@@ -144,11 +145,41 @@ class Controller:
                 raise ValueError('Authentication parameters are required '
                                  'if controller_name not given')
             await self._connector.connect(**kwargs)
+        await self._update_connection_endpoints()
+        self.controller_model = await self.get_model("controller")
+        self.controller_model.add_observer(self.on_controller_model_change)
+
+    async def on_controller_model_change(self, delta, old, new, model):
+        model_info = await model.get_info()
+        print(delta.entity, delta.type, delta.data["agent-status"]["current"])
+        if delta.entity == "machine" :
+            if delta.type == "change":
+                if delta.data["agent-status"]["current"] == "started":
+                    await asyncio.sleep(10)
+                    await self._update_connection_endpoints()
+            if delta.type == "remove":
+                    await asyncio.sleep(10)
+                    await self._update_connection_endpoints()
+
+    async def _update_connection_endpoints(self):
         info = await self.info()
-        self._connector._connection.endpoints = [
-            (e, info.results[0].cacert)
-            for e in info.results[0].addresses
-        ]
+        cacert = info.results[0].cacert
+        addresses = info.results[0].addresses
+        endpoints = self.connection().endpoints
+        if endpoints:
+            for endpoint in  addresses:
+                if (endpoint, cacert) not in endpoints:
+                    self.connection().endpoints = [
+                        (e, cacert)
+                        for e in addresses
+                    ]
+                    break
+        else:
+            self.connection().endpoints = [
+                (e, cacert)
+                for e in addresses
+            ]
+        return addresses
 
     async def connect_current(self):
         """
@@ -194,11 +225,21 @@ class Controller:
         info = await self.info()
         return info.results[0].addresses
 
+    @property
+    async def cacert(self):
+        """Get CA Certificate
+
+        :return string: Cacert
+        """
+        info = await self.info()
+        return info.results[0].cacert
+
     async def disconnect(self):
         """Shut down the watcher task and close websockets.
 
         """
         await self._connector.disconnect()
+        self.controller_model = None
 
     async def add_credential(self, name=None, credential=None, cloud=None,
                              owner=None, force=False):

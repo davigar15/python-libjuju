@@ -546,7 +546,8 @@ class Connection:
         the other holds a dict of the keyword args.
         """
         return {
-            'endpoint': self.endpoint,
+            'endpoint': [e for (e, _) in self.endpoints] if self.endpoints else self.endpoint,
+            # 'endpoint': self.endpoint,
             'uuid': self.uuid,
             'username': self.username,
             'password': self.password,
@@ -605,6 +606,8 @@ class Connection:
                     break
                 except ConnectionError:
                     continue  # ignore; try another endpoint
+                except websockets.exceptions.InvalidStatusCode:
+                    continue
             else:
                 _endpoints_str = ', '.join([endpoint
                                             for endpoint, cacert in endpoints])
